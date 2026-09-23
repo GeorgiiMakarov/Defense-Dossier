@@ -16,6 +16,8 @@ Merkle-anchored batch commitments, provenance, RFC 3161 timestamping, Merkle-pro
 python3 defense_dossier_demo.py
 ```
 
+**Презентация:** ![Defense-Dossier — презентация](presentation-dd.webp)
+
 ---
 
 ## Case Study: Spatial XR AdTech Audit
