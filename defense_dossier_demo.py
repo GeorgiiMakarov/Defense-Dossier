@@ -33,18 +33,26 @@ def mock_ecp_sign(submitter_id: str, content_hash: str) -> str:
     raw = f"MOCK-SIGNATURE:{submitter_id}:{content_hash}".encode()
     return hashlib.sha256(raw).hexdigest()[:16]
 
-def _hash_pair(a: str, b: str) -> str:
-    return hashlib.sha256((a + b).encode("utf-8")).hexdigest()
+def _hash_leaf_hex(h: str) -> str:
+    # RFC 6962 domain separation: leaf = SHA256(0x00 || data)
+    return hashlib.sha256(b"\x00" + bytes.fromhex(h)).hexdigest()
+
+
+def _hash_node_hex(a: str, b: str) -> str:
+    # RFC 6962 domain separation: node = SHA256(0x01 || left || right)
+    return hashlib.sha256(b"\x01" + bytes.fromhex(a) + bytes.fromhex(b)).hexdigest()
 
 def build_merkle_tree(leaf_hashes):
-    levels = [leaf_hashes[:]]
-    current = leaf_hashes[:]
+    if not leaf_hashes:
+        raise ValueError("build_merkle_tree: empty leaf set")
+    current = [_hash_leaf_hex(h) for h in leaf_hashes]
+    levels = [current]
     while len(current) > 1:
         nxt = []
         for i in range(0, len(current), 2):
             left = current[i]
             right = current[i + 1] if i + 1 < len(current) else current[i]
-            nxt.append(_hash_pair(left, right))
+            nxt.append(_hash_node_hex(left, right))
         levels.append(nxt)
         current = nxt
     return levels
@@ -57,13 +65,16 @@ def merkle_proof(levels, index):
         sibling_idx = idx - 1 if is_right else idx + 1
         if sibling_idx < len(level):
             proof.append((level[sibling_idx], "L" if is_right else "R"))
+        else:
+            # odd level: the last node was duplicated, it pairs with itself
+            proof.append((level[idx], "R"))
         idx //= 2
     return proof
 
 def verify_merkle_proof(leaf_hash, proof, root):
-    current = leaf_hash
+    current = _hash_leaf_hex(leaf_hash)
     for sibling, side in proof:
-        current = _hash_pair(sibling, current) if side == "L" else _hash_pair(current, sibling)
+        current = _hash_node_hex(sibling, current) if side == "L" else _hash_node_hex(current, sibling)
     return current == root
 
 def mock_rfc3161_timestamp(root_hash: str) -> dict:
@@ -87,9 +98,20 @@ def reconcile(developer_leaves, inspector_leaves):
     by_period_dev = {l.period: l.content["spend_pct"] for l in developer_leaves}
     by_period_insp = {l.period: l.content["physical_progress_pct"] for l in inspector_leaves}
     results = []
-    for period in sorted(set(by_period_dev) & set(by_period_insp)):
-        dev_pct = by_period_dev[period]
-        insp_pct = by_period_insp[period]
+    for period in sorted(set(by_period_dev) | set(by_period_insp)):
+        dev_pct = by_period_dev.get(period)
+        insp_pct = by_period_insp.get(period)
+        if dev_pct is None or insp_pct is None:
+            # a period claimed in only one stream is itself a red flag
+            results.append({
+                "period": period,
+                "developer_spend_pct": dev_pct,
+                "inspector_physical_pct": insp_pct,
+                "gap_pct": None,
+                "flagged": True,
+                "reason": "missing_counterpart",
+            })
+            continue
         gap = dev_pct - insp_pct
         flagged = abs(gap) > DISCREPANCY_THRESHOLD_PCT
         results.append({
@@ -98,6 +120,7 @@ def reconcile(developer_leaves, inspector_leaves):
             "inspector_physical_pct": insp_pct,
             "gap_pct": gap,
             "flagged": flagged,
+            "reason": "threshold" if flagged else "ok",
         })
     return results
 
@@ -140,14 +163,12 @@ def make_synthetic_leaves():
     ]
     leaves = []
     for d in developer_data:
-        preview_hash = hashlib.sha256(json.dumps(d, sort_keys=True).encode()).hexdigest()
         leaf = Leaf(submitter_id="developer_obj17", role="developer", period=d["period"], content=d, claimed_date=f"2026-P{d['period']}")
-        leaf.signature = mock_ecp_sign(leaf.submitter_id, preview_hash)
+        leaf.signature = mock_ecp_sign(leaf.submitter_id, leaf.content_hash())
         leaves.append(leaf)
     for i in inspector_data:
-        preview_hash = hashlib.sha256(json.dumps(i, sort_keys=True).encode()).hexdigest()
         leaf = Leaf(submitter_id="inspector_independent_llp", role="inspector", period=i["period"], content=i, claimed_date=f"2026-P{i['period']}")
-        leaf.signature = mock_ecp_sign(leaf.submitter_id, preview_hash)
+        leaf.signature = mock_ecp_sign(leaf.submitter_id, leaf.content_hash())
         leaves.append(leaf)
     return leaves
 
@@ -171,7 +192,10 @@ def run_demo():
     print("-" * 70)
     for r in reconcile(developer_leaves, inspector_leaves):
         flag = "РАСХОЖДЕНИЕ" if r["flagged"] else "OK"
-        print(f" Период {r['period']}: {r['developer_spend_pct']}% vs {r['inspector_physical_pct']}% -> {flag} ({r['gap_pct']:+.0f}%)")
+        if r["gap_pct"] is None:
+            print(f" Период {r['period']}: нет пары во втором потоке -> {flag}")
+        else:
+            print(f" Период {r['period']}: {r['developer_spend_pct']}% vs {r['inspector_physical_pct']}% -> {flag} ({r['gap_pct']:+.0f}%)")
     print(f"\n[6] Merkle-proof")
     target_leaf = next(l for l in leaves if l.role == "developer" and l.period == 3)
     target_index = leaves.index(target_leaf)
@@ -184,7 +208,7 @@ def run_demo():
     print(f" 68 -> 45: {'ОТКЛОНЕНО' if not tampered_valid else 'ОШИБКА'}")
     print(f"\n[8] Access Control Service")
     period3 = next(r for r in reconcile(developer_leaves, inspector_leaves) if r["period"] == 3)
-    full_record = {"period": 3, "claimed_date": "2026-P3", "role": "reconciliation", "verified": True, "spend_pct": 68, "physical_progress_pct": 44, "gap_pct": 24, "flagged": True, "submitter_id": "developer_obj17"}
+    full_record = {"period": 3, "claimed_date": "2026-P3", "role": "reconciliation", "verified": is_valid, "spend_pct": 68, "physical_progress_pct": 44, "gap_pct": 24, "flagged": True, "submitter_id": "developer_obj17"}
     for role in ("public", "bank", "kzk"):
         print(f" {role}: {access_control_view(full_record, role)}")
     print(f"\n[9] Bypass-resistance")
