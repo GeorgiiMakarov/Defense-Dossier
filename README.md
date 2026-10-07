@@ -1,19 +1,30 @@
 # Defense-Dossier
-Defense Dossier (synthetic demo) — cryptographically verifiable immutable audit trail: Merkle-anchored batch commitments, provenance, RFC 3161 timestamping, Merkle-proofs and reconciliation for construction and regulated finance.
-# Defense Dossier (synthetic demo) — cryptographically verifiable immutable audit trail
 
-Merkle-anchored batch commitments, provenance, RFC 3161 timestamping, Merkle-proof & reconciliation for construction & regulated finance.
+**Синтетическое демо** проверяемого аудиторского следа: Merkle-anchored batch commitments, provenance, штампы времени RFC 3161, Merkle-proof и сверка двух потоков — для стройки и регулируемых финансов.
 
 **Core:** immutable audit trail / Merkle-anchored batches / cryptographic integrity / provenance / timestamping / reconciliation.
 
-**Что реально в демо:** хеширование SHA-256, Merkle-дерево, Merkle-proof, логика сверки двух независимых потоков, фильтрация по ролям (Access Control Service) с bypass-resistance через токен.
+**Что реально в демо:** хеширование SHA-256, Merkle-дерево (domain separation 0x00/0x01, непарный узел продвигается — RFC 6962), Merkle-proof, логика сверки двух потоков, фильтрация по ролям (Access Control Service) с bypass-resistance через токен. Корень батча воспроизводим: в leaf_hash входит логическое время документа, а не wall-clock хоста.
 
 **Что замокано:** ЭЦП НУЦ РК, RFC 3161 TSA, публичный анкер. Моки — обычные функции с понятными сигнатурами; живая интеграция заменяет их точечно, ядро переписывать не нужно.
+
+**Два сценария, одно ядро:**
+
+| Сценарий | Файл | Сюжет |
+|---|---|---|
+| Стройка (KZ) | `defense_dossier_demo.py` | 4 периода: отчёты застройщика vs полевые отчёты независимого инженера; порог 15% ловит расхождение P3 |
+| Выплаты (RU) | `defense_dossier_payout_demo.py` | цикл 2026-W40: начисления платформы vs перечисления банка, 6 продавцов; находит расхождение −2 500 ₽ и выплату без пары |
+
+Сценарий выплат — синтетика под питч маркетплейс-банку (пример — WB Bank): проверяемый след «еженедельный отчёт → электронная заявка → перечисление». Это данные и тонкая обёртка на том же ядре, не контур банка.
+
+**Карта контуров:** ядро (`defense_dossier_demo.py`) юрисдикционно нейтрально; стройка-демо — Казахстан (НУЦ РК, КС-2); payout-демо — Россия (рубли; ГОСТ/КриптоПро — точка подключения адаптера, в демо заглушка).
 
 **Запуск:**
 
 ```bash
-python3 defense_dossier_demo.py
+python3 defense_dossier_demo.py          # стройка: 8 листьев, сверка, proof, ACS
+python3 defense_dossier_payout_demo.py   # выплаты: 11 листьев, сверка, proof, ACS
+python3 -m unittest discover -s tests   # 12 тестов: proof, коллизия непарного узла, детерминизм, сверка, ACS
 ```
 
 **Презентация:** ![Defense-Dossier — презентация](presentation-dd.webp)

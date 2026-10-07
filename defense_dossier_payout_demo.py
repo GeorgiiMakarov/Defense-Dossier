@@ -10,18 +10,18 @@ Defense-Dossier — банковский сценарий: проверяемы�
 Ядро не меняется: сценарий выплат — это данные и тонкая обёртка поверх.
 
 Честные границы (см. также README):
-  - Подписи/штампы/анкер — заглушки ядра (mock_*). Для российского контура
-    они точечно заменяются на ЭЦП по ГОСТ (КриптоПро), штамп времени
-    аккредитованного УЦ (RFC 3161) и внутренний реестр банка. Пути проверки
-    подписи (verify) в ядре пока нет — подделка в демо ловится сменой
-    содержимого записи, не сломом подписи.
+  - Подписи/штампы/анкер — заглушки ядра (mock_*), точки подключения
+    настоящих адаптеров. В пилоте сюда встают ЭЦП по ГОСТ (КриптоПро),
+    штамп времени аккредитованного УЦ (RFC 3161) и внутренний реестр банка.
+    Пути проверки подписи (verify) в ядре пока нет — подделка в демо
+    ловится сменой содержимого записи, не сломом подписи.
   - Два потока (начисления платформы / перечисления банка) в демо идут одним
     процессом в один батч. Merkle доказывает включение записи и её
     неизменность, а не независимость контуров. Сверка находит расхождения
     между потоками до обращений продавцов.
-  - Корень батча не воспроизводится между прогонами: в leaf_hash входит
-    wall-clock ingestion_ts хоста. Для пилота в батч кладётся логическое
-    время документа / sequence вместо времени хоста.
+  - В leaf_hash входит логическое время документа (фиксированная шкала
+    синтетического цикла), а не wall-clock хоста, — корень батча одинаков
+    при каждом запуске. В пилоте сюда кладётся время документа / sequence.
 
 Запуск:  python3 defense_dossier_payout_demo.py     # только stdlib
 """
@@ -37,6 +37,10 @@ from defense_dossier_demo import (
 )
 
 CYCLE = "2026-W40"
+
+# Логическое время документов синтетического цикла (не wall-clock хоста):
+# корень батча одинаков при каждом запуске.
+_DOC_TS_BASE = 1767225600.0  # 2026-01-01T00:00:00Z
 
 # Поток 1 — начисления на стороне платформы (отчёт реализации -> баланс).
 # WB-2026W40-006: начисление есть, перечисления нет — типичный кейс
@@ -104,16 +108,18 @@ def payout_api_endpoint(record: dict, token, requested_role: str = None) -> dict
 
 def make_payout_leaves():
     leaves = []
-    for a in PLATFORM_ACCRUALS:
+    for seq, a in enumerate(PLATFORM_ACCRUALS):
         content = {"event": "accrual", "cycle": CYCLE, **a}
         leaf = Leaf(submitter_id="platform_wb", role="platform",
-                    period=40, content=content, claimed_date=CYCLE)
+                    period=40, content=content, claimed_date=CYCLE,
+                    ingestion_ts=_DOC_TS_BASE + seq)
         leaf.signature = mock_ecp_sign(leaf.submitter_id, leaf.content_hash())
         leaves.append(leaf)
-    for t in BANK_TRANSFERS:
+    for seq, t in enumerate(BANK_TRANSFERS):
         content = {"event": "transfer", "cycle": CYCLE, **t}
         leaf = Leaf(submitter_id="wb_bank_ops", role="bank",
-                    period=40, content=content, claimed_date=CYCLE)
+                    period=40, content=content, claimed_date=CYCLE,
+                    ingestion_ts=_DOC_TS_BASE + seq + 0.5)
         leaf.signature = mock_ecp_sign(leaf.submitter_id, leaf.content_hash())
         leaves.append(leaf)
     return leaves

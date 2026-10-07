@@ -11,6 +11,10 @@ class Leaf:
     period: int
     content: dict
     claimed_date: str
+    # Default is host wall-clock. Demos pass explicit LOGICAL document time
+    # (see make_synthetic_leaves / make_payout_leaves) so the Merkle root is
+    # reproducible run to run. A pilot puts document time / sequence here,
+    # never the ingestion host's clock.
     ingestion_ts: float = field(default_factory=time.time)
     signature: Optional[str] = None
 
@@ -34,12 +38,12 @@ def mock_ecp_sign(submitter_id: str, content_hash: str) -> str:
     return hashlib.sha256(raw).hexdigest()[:16]
 
 def _hash_leaf_hex(h: str) -> str:
-    # RFC 6962 domain separation: leaf = SHA256(0x00 || data)
+    # Domain separation leaf = SHA256(0x00 || data), as in RFC 6962.
     return hashlib.sha256(b"\x00" + bytes.fromhex(h)).hexdigest()
 
 
 def _hash_node_hex(a: str, b: str) -> str:
-    # RFC 6962 domain separation: node = SHA256(0x01 || left || right)
+    # Domain separation node = SHA256(0x01 || left || right), as in RFC 6962.
     return hashlib.sha256(b"\x01" + bytes.fromhex(a) + bytes.fromhex(b)).hexdigest()
 
 def build_merkle_tree(leaf_hashes):
@@ -50,9 +54,13 @@ def build_merkle_tree(leaf_hashes):
     while len(current) > 1:
         nxt = []
         for i in range(0, len(current), 2):
-            left = current[i]
-            right = current[i + 1] if i + 1 < len(current) else current[i]
-            nxt.append(_hash_node_hex(left, right))
+            if i + 1 < len(current):
+                nxt.append(_hash_node_hex(current[i], current[i + 1]))
+            else:
+                # Odd node is promoted unchanged (RFC 6962 style),
+                # NOT hashed with itself (Bitcoin style). Duplication makes
+                # [A,B,C] and [A,B,C,C] collide to the same root (CVE-2012-2459).
+                nxt.append(current[i])
         levels.append(nxt)
         current = nxt
     return levels
@@ -65,9 +73,8 @@ def merkle_proof(levels, index):
         sibling_idx = idx - 1 if is_right else idx + 1
         if sibling_idx < len(level):
             proof.append((level[sibling_idx], "L" if is_right else "R"))
-        else:
-            # odd level: the last node was duplicated, it pairs with itself
-            proof.append((level[idx], "R"))
+        # else: odd node was promoted to the next level unchanged —
+        # no sibling at this level, nothing to append to the proof.
         idx //= 2
     return proof
 
@@ -132,7 +139,13 @@ VIEW_RULES = {
 }
 
 def access_control_view(record: dict, viewer_role: str) -> dict:
-    allowed = VIEW_RULES.get(viewer_role)
+    # Fail closed: an unknown role (incl. a typo) gets the public mask,
+    # never the full record. Only "internal" (explicit None in VIEW_RULES)
+    # sees everything. The role bound to the AuthToken decides;
+    # public_api_endpoint ignores any client-requested role.
+    if viewer_role not in VIEW_RULES:
+        viewer_role = "public"
+    allowed = VIEW_RULES[viewer_role]
     if allowed is None:
         return dict(record)
     return {k: v for k, v in record.items() if k in allowed}
@@ -147,6 +160,11 @@ def issue_token(holder: str, bound_role: str) -> AuthToken:
 
 def public_api_endpoint(record: dict, token: AuthToken, requested_role: str = None) -> dict:
     return access_control_view(record, token.bound_role)
+
+# Logical document time for the synthetic cycle: a fixed scale, not the host
+# wall-clock, so the Merkle root is identical on every run. A pilot puts
+# real document time / sequence numbers here.
+_DOC_TS_BASE = 1767225600.0  # 2026-01-01T00:00:00Z
 
 def make_synthetic_leaves():
     developer_data = [
@@ -163,11 +181,13 @@ def make_synthetic_leaves():
     ]
     leaves = []
     for d in developer_data:
-        leaf = Leaf(submitter_id="developer_obj17", role="developer", period=d["period"], content=d, claimed_date=f"2026-P{d['period']}")
+        leaf = Leaf(submitter_id="developer_obj17", role="developer", period=d["period"], content=d, claimed_date=f"2026-P{d['period']}",
+                    ingestion_ts=_DOC_TS_BASE + d["period"])
         leaf.signature = mock_ecp_sign(leaf.submitter_id, leaf.content_hash())
         leaves.append(leaf)
     for i in inspector_data:
-        leaf = Leaf(submitter_id="inspector_independent_llp", role="inspector", period=i["period"], content=i, claimed_date=f"2026-P{i['period']}")
+        leaf = Leaf(submitter_id="inspector_independent_llp", role="inspector", period=i["period"], content=i, claimed_date=f"2026-P{i['period']}",
+                    ingestion_ts=_DOC_TS_BASE + i["period"] + 0.5)
         leaf.signature = mock_ecp_sign(leaf.submitter_id, leaf.content_hash())
         leaves.append(leaf)
     return leaves
