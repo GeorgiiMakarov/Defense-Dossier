@@ -112,14 +112,14 @@ def make_payout_leaves():
         content = {"event": "accrual", "cycle": CYCLE, **a}
         leaf = Leaf(submitter_id="platform_wb", role="platform",
                     period=40, content=content, claimed_date=CYCLE,
-                    ingestion_ts=_DOC_TS_BASE + seq)
+                    event_ts=_DOC_TS_BASE + seq)
         leaf.signature = mock_ecp_sign(leaf.submitter_id, leaf.content_hash())
         leaves.append(leaf)
     for seq, t in enumerate(BANK_TRANSFERS):
         content = {"event": "transfer", "cycle": CYCLE, **t}
         leaf = Leaf(submitter_id="wb_bank_ops", role="bank",
                     period=40, content=content, claimed_date=CYCLE,
-                    ingestion_ts=_DOC_TS_BASE + seq + 0.5)
+                    event_ts=_DOC_TS_BASE + seq + 0.5)
         leaf.signature = mock_ecp_sign(leaf.submitter_id, leaf.content_hash())
         leaves.append(leaf)
     return leaves
@@ -167,7 +167,9 @@ def run_demo():
     print(f"[2] Merkle root: {root}")
 
     ts = mock_rfc3161_timestamp(root)
-    print(f"[3] Штамп времени (MOCK): {ts['tsa']}, {ts['timestamp']}")
+    # Нейтральная подпись мока: без привязки к юрисдикции (ядро нейтрально,
+    # у стройка-демо своя метка). Пояснение про контур — строкой ниже.
+    print(f"[3] Штамп времени (MOCK): MOCK-TSA, {ts['timestamp']}")
     print("     Для российского контура сюда подключается штамп аккредитованного УЦ.")
     anch = mock_public_anchor(root)
     print(f"[4] Анкер (MOCK): {anch['anchor_type']}")
@@ -200,7 +202,7 @@ def run_demo():
         submitter_id="wb_bank_ops", role="bank", period=40,
         content={**target.content, "amount_rub": 140000},
         claimed_date=target.claimed_date,
-        ingestion_ts=target.ingestion_ts, signature=target.signature,
+        event_ts=target.event_ts, signature=target.signature,
     )
     tampered_ok = verify_merkle_proof(tampered.leaf_hash(), proof, root)
     print(f" 142300 -> 140000 руб.: {'ОТКЛОНЕНО' if not tampered_ok else 'ОШИБКА'}")

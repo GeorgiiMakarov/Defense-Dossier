@@ -29,7 +29,7 @@ import defense_dossier_payout_demo as payout
 def _leaf(cid, amount, ts=1767225600.0):
     return Leaf(submitter_id="t", role="reconciliation", period=40,
                 content={"payout_id": cid, "amount_rub": amount},
-                claimed_date="2026-W40", ingestion_ts=ts)
+                claimed_date="2026-W40", event_ts=ts)
 
 
 def _root(leaves):

@@ -11,11 +11,12 @@ class Leaf:
     period: int
     content: dict
     claimed_date: str
-    # Default is host wall-clock. Demos pass explicit LOGICAL document time
-    # (see make_synthetic_leaves / make_payout_leaves) so the Merkle root is
-    # reproducible run to run. A pilot puts document time / sequence here,
-    # never the ingestion host's clock.
-    ingestion_ts: float = field(default_factory=time.time)
+    # Logical event time of the record (document time / sequence), NOT the
+    # host's wall-clock: the Merkle root must be reproducible run to run.
+    # Demos pass it explicitly (see make_synthetic_leaves /
+    # make_payout_leaves). Default is host wall-clock for backward
+    # compatibility — a pilot always sets document time / sequence here.
+    event_ts: float = field(default_factory=time.time)
     signature: Optional[str] = None
 
     def content_hash(self) -> str:
@@ -28,7 +29,7 @@ class Leaf:
             "submitter_id": self.submitter_id,
             "role": self.role,
             "signature": self.signature,
-            "ingestion_ts": self.ingestion_ts,
+            "event_ts": self.event_ts,
         }
         payload = json.dumps(record, sort_keys=True, ensure_ascii=False)
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
@@ -182,12 +183,12 @@ def make_synthetic_leaves():
     leaves = []
     for d in developer_data:
         leaf = Leaf(submitter_id="developer_obj17", role="developer", period=d["period"], content=d, claimed_date=f"2026-P{d['period']}",
-                    ingestion_ts=_DOC_TS_BASE + d["period"])
+                    event_ts=_DOC_TS_BASE + d["period"])
         leaf.signature = mock_ecp_sign(leaf.submitter_id, leaf.content_hash())
         leaves.append(leaf)
     for i in inspector_data:
         leaf = Leaf(submitter_id="inspector_independent_llp", role="inspector", period=i["period"], content=i, claimed_date=f"2026-P{i['period']}",
-                    ingestion_ts=_DOC_TS_BASE + i["period"] + 0.5)
+                    event_ts=_DOC_TS_BASE + i["period"] + 0.5)
         leaf.signature = mock_ecp_sign(leaf.submitter_id, leaf.content_hash())
         leaves.append(leaf)
     return leaves
@@ -223,7 +224,7 @@ def run_demo():
     is_valid = verify_merkle_proof(target_leaf.leaf_hash(), proof, root)
     print(f" Проверка листа P3: {'ПОДТВЕРЖДЕНО' if is_valid else 'ОШИБКА'}")
     print(f"\n[7] Подделка")
-    tampered = Leaf(submitter_id=target_leaf.submitter_id, role=target_leaf.role, period=target_leaf.period, content={**target_leaf.content, "spend_pct": 45}, claimed_date=target_leaf.claimed_date, ingestion_ts=target_leaf.ingestion_ts, signature=target_leaf.signature)
+    tampered = Leaf(submitter_id=target_leaf.submitter_id, role=target_leaf.role, period=target_leaf.period, content={**target_leaf.content, "spend_pct": 45}, claimed_date=target_leaf.claimed_date, event_ts=target_leaf.event_ts, signature=target_leaf.signature)
     tampered_valid = verify_merkle_proof(tampered.leaf_hash(), proof, root)
     print(f" 68 -> 45: {'ОТКЛОНЕНО' if not tampered_valid else 'ОШИБКА'}")
     print(f"\n[8] Access Control Service")
