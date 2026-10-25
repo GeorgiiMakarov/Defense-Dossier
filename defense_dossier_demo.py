@@ -4,6 +4,62 @@ import time
 from dataclasses import dataclass, field
 from typing import Optional
 
+# ---------------------------------------------------------------------------
+# Точки интеграции: адаптеры. Синтетика — значение по умолчанию.
+# Банк подменяет реализации своими без правок ядра:
+#   signer -> KalkanCrypt (SDK НУЦ РК) или NCANode (MIT, HTTP/RabbitMQ)
+#   tsa    -> RFC 3161 TSA; гос. вариант: http://tsp.pki.gov.kz
+#   anchor -> публичный анкер / внутренний реестр банка
+# ---------------------------------------------------------------------------
+
+class Signer:
+    """Подпись content_hash ключом submitter_id. Возвращает строку подписи."""
+    def sign(self, submitter_id: str, content_hash: str) -> str:
+        raise NotImplementedError
+
+class SyntheticSigner(Signer):
+    """Заглушка вместо ЭЦП НУЦ РК: детерминированная псевдо-подпись."""
+    def sign(self, submitter_id: str, content_hash: str) -> str:
+        raw = f"MOCK-SIGNATURE:{submitter_id}:{content_hash}".encode()
+        return hashlib.sha256(raw).hexdigest()[:16]
+
+class TimestampAuthority:
+    """Метка времени RFC 3161 на root_hash. Возвращает dict токена."""
+    def timestamp(self, root_hash: str) -> dict:
+        raise NotImplementedError
+
+class SyntheticTSA(TimestampAuthority):
+    """Заглушка вместо RFC 3161 TSA."""
+    def timestamp(self, root_hash: str) -> dict:
+        return {
+            "root": root_hash,
+            "tsa": "MOCK-НУЦ-РК-TSA",
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "token": hashlib.sha256(f"MOCK-TSA-TOKEN:{root_hash}".encode()).hexdigest()[:24],
+        }
+
+class Anchor:
+    """Публичное якорение root_hash. Возвращает dict с референсом."""
+    def anchor(self, root_hash: str) -> dict:
+        raise NotImplementedError
+
+class SyntheticAnchor(Anchor):
+    """Заглушка вместо публичного анкера."""
+    def anchor(self, root_hash: str) -> dict:
+        return {
+            "root": root_hash,
+            "anchor_type": "MOCK-PUBLIC-ANCHOR",
+            "ref": "0x" + hashlib.sha256(f"MOCK-ANCHOR-REF:{root_hash}".encode()).hexdigest(),
+        }
+
+# Реализации по умолчанию. Банк подставляет свои:
+#   defense_dossier_demo.signer = KalkanSigner(...)
+#   defense_dossier_demo.tsa = Rfc3161TSA("http://tsp.pki.gov.kz")
+#   defense_dossier_demo.anchor = BankAnchor(...)
+signer: Signer = SyntheticSigner()
+tsa: TimestampAuthority = SyntheticTSA()
+anchor: Anchor = SyntheticAnchor()
+
 @dataclass
 class Leaf:
     submitter_id: str
@@ -35,8 +91,7 @@ class Leaf:
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 def mock_ecp_sign(submitter_id: str, content_hash: str) -> str:
-    raw = f"MOCK-SIGNATURE:{submitter_id}:{content_hash}".encode()
-    return hashlib.sha256(raw).hexdigest()[:16]
+    return signer.sign(submitter_id, content_hash)
 
 def _hash_leaf_hex(h: str) -> str:
     # Domain separation leaf = SHA256(0x00 || data), as in RFC 6962.
@@ -86,19 +141,10 @@ def verify_merkle_proof(leaf_hash, proof, root):
     return current == root
 
 def mock_rfc3161_timestamp(root_hash: str) -> dict:
-    return {
-        "root": root_hash,
-        "tsa": "MOCK-НУЦ-РК-TSA",
-        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "token": hashlib.sha256(f"MOCK-TSA-TOKEN:{root_hash}".encode()).hexdigest()[:24],
-    }
+    return tsa.timestamp(root_hash)
 
 def mock_public_anchor(root_hash: str) -> dict:
-    return {
-        "root": root_hash,
-        "anchor_type": "MOCK-PUBLIC-ANCHOR",
-        "ref": "0x" + hashlib.sha256(f"MOCK-ANCHOR-REF:{root_hash}".encode()).hexdigest(),
-    }
+    return anchor.anchor(root_hash)
 
 DISCREPANCY_THRESHOLD_PCT = 15
 
